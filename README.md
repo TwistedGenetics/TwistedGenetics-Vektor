@@ -39,6 +39,7 @@ Vektor then appears at the end of the oscillator list as **Vektor**. It's polyph
 | 2 | DETUNE | 0–100 % | Spreads the corners up to 12 cents apart (A stays, B up, C down, D half up). Adds movement and width to blends |
 | 3 | PATHRATE | 0–100 | Path speed: about 4 s per segment at 0, ~20 ms at 100 |
 | 3 | PATHAMT | 0–100 % | How far the path moves the X/Y point. 100 % with the knobs centred covers the whole square |
+| 3 | BRIGHT | 0–100 | Key-tracked low-pass (12 dB/oct) that takes the edge off bright waves. 0 = almost a sine, 60 = default, 100 = off (raw waves). Because it tracks the note, it sounds the same across the keyboard |
 
 ### The paths
 
@@ -70,23 +71,24 @@ Mixing two *different* types across a diagonal is where vector synthesis shines:
 
 ### Virtual patch
 
-Vektor adds four modulation destinations: **VectorX**, **VectorY**, **PathAmt** and **PathRate**, all per voice. These sit on top of the path. Ideas:
+Vektor adds five modulation destinations: **VectorX**, **VectorY**, **PathAmt**, **PathRate** and **Bright**, all per voice. These sit on top of the path. Ideas:
 
 - **Mod wheel → VectorY**: play the path, then push the whole route up toward A/B.
 - **LFO → VectorX** with PATH Off: a classic two-axis wobble without using a path.
 - **Velocity → PathAmt**: soft notes stay near the knob position, hard notes travel further.
+- **Velocity → Bright**: harder notes open up, like a velocity-sensitive filter that tracks the keyboard.
 - **Envelope → PathRate**: paths that start fast and slow down.
 
 ## Starter settings
 
-| Name | X | Y | Path | A | B | C | D | Detune | Rate | Amt |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **Init (default)** | 512 | 512 | Circle | Saw | Vox A | Glass | Sync | 20 | 30 | 70 |
-| **VS Pad** | 512 | 512 | A>D | Vox O | Glass | Organ | Saw | 35 | 20 | 100 |
-| **Digital Tour** | 512 | 512 | Tour | Metal | Sync | Comb | Fold | 10 | 45 | 100 |
-| **Choir Drift** | 512 | 512 | Wander | Vox A | Vox O | Reed | Tri | 50 | 25 | 90 |
-| **Wobble Bass** | 512 | 300 | Bounce | Saw | Square | Pulse | Narrow | 15 | 70 | 80 |
-| **Brass Eight** | 512 | 512 | Fig 8 | Brass | Saw | Square | Organ | 25 | 40 | 75 |
+| Name | X | Y | Path | A | B | C | D | Detune | Rate | Amt | Bright |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Init (default)** | 512 | 512 | Circle | Saw | Vox A | Glass | Organ | 20 | 30 | 70 | 60 |
+| **VS Pad** | 512 | 512 | A>D | Vox O | Glass | Organ | Saw | 35 | 20 | 100 | 55 |
+| **Digital Tour** | 512 | 512 | Tour | Metal | Sync | Comb | Fold | 10 | 45 | 100 | 75 |
+| **Choir Drift** | 512 | 512 | Wander | Vox A | Vox O | Reed | Tri | 50 | 25 | 90 | 60 |
+| **Wobble Bass** | 512 | 300 | Bounce | Saw | Square | Pulse | Narrow | 15 | 70 | 80 | 45 |
+| **Brass Eight** | 512 | 512 | Fig 8 | Brass | Saw | Square | Organ | 25 | 40 | 75 | 65 |
 
 Every build renders these as WAV demos (in the Actions build artifact, `test/out/`).
 
@@ -105,7 +107,7 @@ To build locally (Linux x86_64 or aarch64):
 
 ## How it works
 
-- **Wave tables:** each wave is defined by its harmonic spectrum and built at load time into 9 band-limited levels of 512 samples (255 harmonics down to 1). Each corner picks the level that keeps its top harmonic under 21 kHz. Nothing is stored in the unit file.
+- **Wave tables:** each wave is defined by its harmonic spectrum and built at load time (inverse FFT) into 9 band-limited levels (255 harmonics down to 1). Each level is long enough for at least 32 samples per cycle of its top harmonic (8192 samples down to 1024), so the linear interpolation between table samples doesn't add fizz: inharmonic noise is 73 dB or more below the signal on every wave. Each corner picks the level that keeps its top harmonic under 21 kHz. Nothing is stored in the unit file.
 - **Mix:** bilinear weights across the four corners, with a (Σw²)^-¼ gain so the centre of the square isn't 6 dB quieter than the corners.
 - **Smoothing:** X/Y glides over ~3 ms and weights ramp across each buffer, so knob jumps and fast paths don't click.
 - **CPU:** the path, weights and table level are worked out once per buffer per voice; the sample loop is four interpolated table reads. A corner with zero weight isn't read at all.
@@ -115,6 +117,11 @@ Source layout: `core/vektor.h` (DSP), `microkorg2/` (logue SDK unit), `test/` (d
 ## Unit ID
 
 Developer ID `0x5477476E` ('TwGn'), unit ID 0x10 (16), kept well clear of the IDs other TwistedGenetics units use, so they can all be loaded together.
+
+## Changes
+
+- **1.1.0**: fixes the buzzy, fizzy sound of 1.0.0. The wave tables were too short (512 samples) for the number of harmonics in them, so reading between table samples added inharmonic noise only 35–55 dB down, worst on bass notes. Tables are now 1024–8192 samples, which puts that noise 73 dB or more down. Also: new **BRIGHT** control (key-tracked low-pass, default 60) and Bright modulation destination, softer gaps between the Vox formants, and corner D defaults to Organ instead of Sync.
+- **1.0.0**: first release.
 
 ## License
 

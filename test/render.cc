@@ -67,10 +67,10 @@ static Stats stats(const std::vector<float> &x, size_t from = 0) {
 static float db(float r) { return 20.f * std::log10(std::fmax(r, 1e-12f)); }
 
 // ---- settings ----
-struct Set { int x, y, path, a, b, c, d, detune, rate, amount; };
+struct Set { int x, y, path, a, b, c, d, detune, rate, amount; int bright = 100; };
 static Params makeParams(const Set &s) {
   Params p;
-  const int v[P::kNumParams] = {s.x, s.y, s.path, s.a, s.b, s.c, s.d, s.detune, s.rate, s.amount};
+  const int v[P::kNumParams] = {s.x, s.y, s.path, s.a, s.b, s.c, s.d, s.detune, s.rate, s.amount, s.bright};
   for (int id = 0; id < P::kNumParams; ++id) p.set(id, v[id]);
   return p;
 }
@@ -154,6 +154,65 @@ int main() {
     }
   }
 
+  // ---- interpolation fizz: real note pitches (not locked to the table) ----
+  // Blackman-Harris windowed FFT; energy more than 6 bins from any harmonic.
+  // v1.0.0 (512-sample tables) measured -35..-55 dB here: audible buzz.
+  printf("\n== inharmonic fizz at real pitches (worst note per wave) ==\n");
+  {
+    const int N = 65536;
+    static float re[N], im[N];
+    for (int w = 0; w < kNumWaves; ++w) {
+      float worst = -300.f, worstNote = 0.f;
+      for (float note : {28.f, 35.f, 40.f, 47.f, 52.f, 59.f, 64.f, 71.f, 76.f}) {
+        const auto x = render(makeParams(cornerA(w)), note, (N + 4800) / float(kRate));
+        for (int n = 0; n < N; ++n) {
+          const double t = 2.0 * M_PI * n / N;
+          const double win = 0.35875 - 0.48829 * std::cos(t) + 0.14128 * std::cos(2 * t) - 0.01168 * std::cos(3 * t);
+          re[n] = float(x[4800 + n] * win);
+          im[n] = 0.f;
+        }
+        fft(re, im, N, -1);
+        const double bins = noteW0(note) * N;  // harmonic spacing in bins
+        double harm = 0, other = 0;
+        for (int k = 1; k < N / 2; ++k) {
+          const double e = double(re[k]) * re[k] + double(im[k]) * im[k];
+          const double h = std::round(k / bins);
+          if (h >= 1 && std::fabs(k - h * bins) <= 6) harm += e; else other += e;
+        }
+        const float r = 10.f * std::log10(float(other / harm) + 1e-30f);
+        if (r > worst) { worst = r; worstNote = note; }
+      }
+      result(worst < -65.f, "%-7s worst %6.1f dB (note %.0f)", waveName(w), worst, worstNote);
+    }
+  }
+
+  // ---- BRIGHT ----
+  printf("\n== bright ==\n");
+  {
+    auto centroid = [](const std::vector<float> &x) {
+      const int N = 16384;
+      static float re[N], im[N];
+      for (int n = 0; n < N; ++n) { re[n] = x[4800 + n]; im[n] = 0.f; }
+      fft(re, im, N, -1);
+      double num = 0, den = 0;
+      for (int k = 1; k < N / 2; ++k) { const double e = double(re[k]) * re[k] + double(im[k]) * im[k]; num += e * k; den += e; }
+      return float(num / den * kRate / N);
+    };
+    float last = 1e9f;
+    bool falling = true;
+    for (int b : {100, 80, 60, 40, 20, 0}) {
+      Set st = cornerA(kSaw);
+      st.bright = b;
+      const auto x = render(makeParams(st), 48.f, 0.5f);
+      const float c = centroid(x);
+      const Stats s = stats(x, 4800);
+      printf("  bright %3d  centroid %6.0f Hz  rms %.3f\n", b, c, s.rms);
+      if (c >= last || s.bad) falling = false;
+      last = c;
+    }
+    result(falling, "saw C3: brightness falls as BRIGHT goes down");
+  }
+
   // ---- paths ----
   printf("\n== vector paths ==\n");
   {
@@ -235,7 +294,7 @@ int main() {
   // ---- speed ----
   printf("\n== speed ==\n");
   {
-    Params p = makeParams({512, 512, kPathCircle, kSaw, kVoxA, kGlass, kSync, 30, 60, 70});
+    Params p = makeParams({512, 512, kPathCircle, kSaw, kVoxA, kGlass, kOrgan, 30, 60, 70, 60});
     Voice v[8];
     for (int k = 0; k < 8; ++k) { v[k].init(k + 1); v[k].setPitch(noteW0(48 + 3 * k)); v[k].noteOn(p, true); }
     float buf[64];
@@ -250,12 +309,12 @@ int main() {
   if (system("mkdir -p test/out") != 0) return 1;
   struct Demo { const char *name; Set s; std::vector<float> notes; float secs; };
   const Demo demos[] = {
-      {"default_circle", {512, 512, kPathCircle, kSaw, kVoxA, kGlass, kSync, 20, 30, 70}, {48, 55, 60, 63}, 6},
-      {"a_to_d_pad", {512, 512, kPathAtoD, kVoxO, kGlass, kOrgan, kSaw, 35, 20, 100}, {45, 52, 57, 60, 64}, 6},
-      {"tour_digital", {512, 512, kPathTour, kMetal, kSync, kComb, kFold, 10, 45, 100}, {50, 57, 62}, 5},
-      {"wander_choir", {512, 512, kPathWander, kVoxA, kVoxO, kReed, kTri, 50, 25, 90}, {48, 55, 60, 64, 67}, 7},
-      {"bounce_bass", {512, 300, kPathBounce, kSaw, kSquare, kPulse, kNarrow, 15, 70, 80}, {36}, 4},
-      {"fig8_brass", {512, 512, kPathFig8, kBrass, kSaw, kSquare, kOrgan, 25, 40, 75}, {53, 57, 60}, 6},
+      {"default_circle", {512, 512, kPathCircle, kSaw, kVoxA, kGlass, kOrgan, 20, 30, 70, 60}, {48, 55, 60, 63}, 6},
+      {"a_to_d_pad", {512, 512, kPathAtoD, kVoxO, kGlass, kOrgan, kSaw, 35, 20, 100, 55}, {45, 52, 57, 60, 64}, 6},
+      {"tour_digital", {512, 512, kPathTour, kMetal, kSync, kComb, kFold, 10, 45, 100, 75}, {50, 57, 62}, 5},
+      {"wander_choir", {512, 512, kPathWander, kVoxA, kVoxO, kReed, kTri, 50, 25, 90, 60}, {48, 55, 60, 64, 67}, 7},
+      {"bounce_bass", {512, 300, kPathBounce, kSaw, kSquare, kPulse, kNarrow, 15, 70, 80, 45}, {36}, 4},
+      {"fig8_brass", {512, 512, kPathFig8, kBrass, kSaw, kSquare, kOrgan, 25, 40, 75, 65}, {53, 57, 60}, 6},
   };
   for (const Demo &d : demos) {
     const Params p = makeParams(d.s);

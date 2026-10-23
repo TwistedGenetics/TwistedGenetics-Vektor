@@ -7,8 +7,8 @@
  *  restart each voice's vector path on every note (that's what makes it a
  *  vector synth rather than a crossfader). Until the first voice event
  *  arrives every voice renders, so nothing goes silent if the host never
- *  sends events. The virtual patch can modulate VectorX, VectorY, PathAmt and
- *  PathRate per voice. Buffer layout, mod data access and voice events
+ *  sends events. The virtual patch can modulate VectorX, VectorY, PathAmt,
+ *  PathRate and Bright per voice. Buffer layout, mod data access and voice events
  *  follow Korg's microkorg2/waves example (and Dusty Pads / Rollers).
  */
 
@@ -21,7 +21,7 @@
 
 namespace {
 
-enum { kDestX = 0, kDestY, kDestAmount, kDestRate, kNumDest };
+enum { kDestX = 0, kDestY, kDestAmount, kDestRate, kDestBright, kNumDest };
 
 // Per-voice output trim: voices are summed by the synth (Korg's waves uses 0.3)
 constexpr float kVoiceTrim = 0.5f;
@@ -111,7 +111,7 @@ __attribute__((used)) void unit_render(const float *in, float *out, uint32_t fra
     const float frac = note - static_cast<float>(nn);
     vk::Voice &vo = s_voice[v];
     vo.setPitch(osc_w0f_for_note(nn, static_cast<uint8_t>(frac * 255.f)));
-    vo.setMod(s_mod[kDestX][v], s_mod[kDestY][v], s_mod[kDestAmount][v], s_mod[kDestRate][v]);
+    vo.setMod(s_mod[kDestX][v], s_mod[kDestY][v], s_mod[kDestAmount][v], s_mod[kDestRate][v], s_mod[kDestBright][v]);
 
     uint32_t done = 0;
     while (done < frames) {
@@ -210,6 +210,7 @@ __attribute__((used)) void unit_platform_exclusive(uint8_t messageId, void *data
         case kDestY: writeName(name + 1, "VectorY"); break;
         case kDestAmount: writeName(name + 1, "PathAmt"); break;
         case kDestRate: writeName(name + 1, "PathRate"); break;
+        case kDestBright: writeName(name + 1, "Bright"); break;
         default: break;
       }
       break;

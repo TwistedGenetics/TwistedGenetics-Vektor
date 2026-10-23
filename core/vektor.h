@@ -19,10 +19,13 @@
  *     (one-shot paths stop at their end point, looped paths keep moving)
  *   loudness compensation: the mix gets (sum w^2)^-1/4, so the centre of the
  *     square isn't 6 dB quieter than the corners
+ *   BRIGHT: two one-pole low-passes with a key-tracked cutoff (2 x f0 at 0,
+ *     off at 100), to take the edge off bright waves
  *
  * Wave tables:
- *   16 single-cycle waves x 9 band-limited levels x 512 samples, built once
- *   from harmonic spectra at load time (~300 kB, nothing stored in the unit
+ *   16 single-cycle waves x 9 band-limited levels (8192 .. 1024 samples),
+ *   built once from harmonic spectra by inverse FFT at load time (~1.3 MB,
+ *   nothing stored in the unit
  *   file). Level L holds 255 >> L harmonics; each corner picks the level
  *   that keeps its highest harmonic under 21 kHz, so nothing aliases.
  *   Waves are loudness-matched (RMS, with a peak ceiling), so moving
@@ -47,10 +50,20 @@ namespace vk {
 constexpr float kSR = 48000.f;
 constexpr float kInvSR = 1.f / 48000.f;
 
-constexpr int kTableBits = 9;
-constexpr int kTableSize = 1 << kTableBits;  // 512
-constexpr int kTableMask = kTableSize - 1;
-constexpr int kMaxHarm = kTableSize / 2 - 1;  // 255
+constexpr int kMaxHarm = 255;
+// Table length per level: VK_OVERSAMPLE samples per cycle of the level's top
+// harmonic (8192 for 255 harmonics, 4096, 2048, then 1024 for the rest), so
+// linear interpolation between table samples stays clean (error ~70 dB down
+// or better). v1.0.0 used 512 for everything, which left interpolation error
+// only 35-55 dB down: an inharmonic fizz/buzz, worst on low notes.
+#ifndef VK_OVERSAMPLE
+#define VK_OVERSAMPLE 32
+#endif
+constexpr int kBaseSize = 256 * VK_OVERSAMPLE;
+#ifndef VK_MINSIZE
+#define VK_MINSIZE 1024
+#endif
+constexpr int kMinSize = VK_MINSIZE;
 constexpr int kNumLevels = 9;                 // 255, 127, 63, 31, 15, 7, 3, 1, 1 harmonics
 constexpr int kNumWaves = 16;
 constexpr int kNumCorners = 4;
@@ -63,6 +76,20 @@ static inline float maxf(float a, float b) { return a > b ? a : b; }
 static inline int levelHarmonics(int level) {
   const int h = kMaxHarm >> level;
   return h < 1 ? 1 : h;
+}
+static inline int levelSize(int level) {
+  const int n = kBaseSize >> level;
+  return n < kMinSize ? kMinSize : n;
+}
+static inline int levelOffset(int level) {  // within one wave's tables, +1 guard sample each
+  int o = 0;
+  for (int L = 0; L < level; ++L) o += levelSize(L) + 1;
+  return o;
+}
+constexpr int wavePoolSize() {
+  int o = 0;
+  for (int L = 0; L < kNumLevels; ++L) o += ((kBaseSize >> L) < kMinSize ? kMinSize : (kBaseSize >> L)) + 1;
+  return o;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +109,7 @@ static inline const char *waveName(int w) {
 
 // Formant envelope over frequency (Lorentzian peaks), for the vox waves.
 static inline float formant(float f, const float *F, const float *B, const float *G) {
-  float a = 0.02f;
+  float a = 0.004f;  // small floor between formants (0.02 in v1.0.0 was fizzy)
   for (int i = 0; i < 3; ++i) {
     const float d = (f - F[i]) / B[i];
     a += G[i] / (1.f + d * d);
@@ -179,35 +206,63 @@ static void waveSpectrum(int wave, float *s, float *c) {
   }
 }
 
+// In-place radix-2 complex FFT, sign +1 = inverse (unscaled). Load time only.
+static void fft(float *re, float *im, int n, int sign) {
+  for (int i = 1, j = 0; i < n; ++i) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      float t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (int len = 2; len <= n; len <<= 1) {
+    const double ang = 2.0 * 3.14159265358979323846 / len * sign;
+    for (int k = 0; k < len / 2; ++k) {
+      const float wr = (float)cos(ang * k), wi = (float)sin(ang * k);
+      for (int i = k; i < n; i += len) {
+        const int j = i + len / 2;
+        const float xr = re[j] * wr - im[j] * wi, xi = re[j] * wi + im[j] * wr;
+        re[j] = re[i] - xr; im[j] = im[i] - xi;
+        re[i] += xr; im[i] += xi;
+      }
+    }
+  }
+}
+
 struct Tables {
-  float t[kNumWaves][kNumLevels][kTableSize + 1];  // +1 guard sample for interpolation
+  float pool[kNumWaves][wavePoolSize()];  // per wave: level 0, 1, ... each with a guard sample
+  int off[kNumLevels];
   bool built = false;
+
+  const float *table(int wave, int level) const { return pool[wave] + off[level]; }
 
   void build() {
     if (built) return;
-    static float sn[kTableSize];
-    for (int i = 0; i < kTableSize; ++i) sn[i] = sinf(2.f * 3.14159265358979f * (float)i / kTableSize);
+    for (int L = 0; L < kNumLevels; ++L) off[L] = levelOffset(L);
+    static float re[kBaseSize], im[kBaseSize];
     static float s[kMaxHarm + 1], c[kMaxHarm + 1];
     for (int w = 0; w < kNumWaves; ++w) {
       waveSpectrum(w, s, c);
       float scale = 1.f;
       for (int L = 0; L < kNumLevels; ++L) {
-        float *tab = t[w][L];
-        const int H = levelHarmonics(L);
-        for (int i = 0; i < kTableSize; ++i) {
-          float v = 0.f;
-          for (int h = 1; h <= H; ++h) {
-            const int k = (h * i) & kTableMask;
-            v += s[h] * sn[k] + c[h] * sn[(k + kTableSize / 4) & kTableMask];
-          }
-          tab[i] = v;
+        float *tab = pool[w] + off[L];
+        const int H = levelHarmonics(L), N = levelSize(L);
+        // spectrum -> one cycle by inverse FFT: X[h] = (c - i s) / 2, X[N-h] = conj
+        for (int i = 0; i < N; ++i) re[i] = im[i] = 0.f;
+        for (int h = 1; h <= H && h < N / 2; ++h) {
+          re[h] = 0.5f * c[h]; im[h] = -0.5f * s[h];
+          re[N - h] = 0.5f * c[h]; im[N - h] = 0.5f * s[h];
         }
+        fft(re, im, N, 1);
+        for (int i = 0; i < N; ++i) tab[i] = re[i];
         float peak = 0.f, sq = 0.f;
-        for (int i = 0; i < kTableSize; ++i) {
+        for (int i = 0; i < N; ++i) {
           peak = maxf(peak, fabsf(tab[i]));
           sq += tab[i] * tab[i];
         }
-        const float rms = sqrtf(sq / kTableSize);
+        const float rms = sqrtf(sq / (float)N);
         // Level 0 sets the wave's gain: matched loudness, peak ceiling 0.97
         if (L == 0 && peak > 0.f) {
           const float byPeak = 0.97f / peak, byRms = 0.55f / maxf(rms, 1e-6f);
@@ -216,8 +271,8 @@ struct Tables {
         // Fewer harmonics can mean a higher peak (square -> sine): keep under 1
         float sc = scale;
         if (peak * sc > 0.99f) sc = 0.99f / peak;
-        for (int i = 0; i < kTableSize; ++i) tab[i] *= sc;
-        tab[kTableSize] = tab[0];
+        for (int i = 0; i < N; ++i) tab[i] *= sc;
+        tab[N] = tab[0];
       }
     }
     built = true;
@@ -260,15 +315,17 @@ struct Params {
     kDetune,  // 0..100 % corner detune spread, 0..12 cents
     kRate,    // 0..100   path speed, 4 s .. 20 ms per segment
     kAmount,  // 0..100 % how far the path moves the X/Y point
+    kBright,  // 0..100   key-tracked low-pass: 0 = dark, 100 = off
     kNumParams
   };
 
   float x = 0.5f, y = 0.5f;
   int path = kPathCircle;
-  int wave[kNumCorners] = {kSaw, kVoxA, kGlass, kSync};
+  int wave[kNumCorners] = {kSaw, kVoxA, kGlass, kOrgan};
   float detRatio[kNumCorners] = {1.f, 1.f, 1.f, 1.f};
   float segPerSec = 1.f;
   float amount = 0.7f;
+  float bright = 0.6f;
 
   void set(int id, int32_t v) {
     switch (id) {
@@ -290,6 +347,7 @@ struct Params {
         segPerSec = 0.25f * exp2f(clampf((float)v, 0.f, 100.f) * 0.0764f);
         break;
       case kAmount: amount = clampf((float)v / 100.f, 0.f, 1.f); break;
+      case kBright: bright = clampf((float)v / 100.f, 0.f, 1.f); break;
       default: break;
     }
   }
@@ -305,17 +363,19 @@ class Voice {
     rng_ = seed ? seed : 0x1234567u;
     for (int k = 0; k < kNumCorners; ++k) ph_[k] = 0.f;
     w0_ = 261.6255653f * kInvSR;
-    mx_ = my_ = ma_ = mr_ = 0.f;
+    mx_ = my_ = ma_ = mr_ = mb_ = 0.f;
+    lp1_ = lp2_ = 0.f;
     restartPath(Params());
     snap_ = true;
   }
 
   void setPitch(float w0) { w0_ = clampf(w0, 0.f, 0.45f); }
-  void setMod(float x, float y, float amount, float rate) {
+  void setMod(float x, float y, float amount, float rate, float bright = 0.f) {
     mx_ = x;
     my_ = y;
     ma_ = amount;
     mr_ = rate;
+    mb_ = bright;
   }
 
   // fresh: a new voice (new shared phase, X/Y jumps straight to its start).
@@ -388,21 +448,42 @@ class Voice {
       const float f0 = inc * kSR;
       int L = 0;
       while (L < kNumLevels - 1 && f0 * (float)levelHarmonics(L) > kHarmLimitHz) ++L;
-      const float *tab = tb.t[p.wave[k]][L];
+      const float *tab = tb.table(p.wave[k], L);
+      const int size = levelSize(L), mask = size - 1;
+      const float fsize = (float)size;
 
       float wk = w0;
       const float dw = (w1 - w0) * invLen;
       for (int i = 0; i < len; ++i) {
-        const float idx = ph * (float)kTableSize;
+        const float idx = ph * fsize;
         const int i0 = (int)idx;
         const float f = idx - (float)i0;
-        const float a = tab[i0 & kTableMask], b = tab[(i0 & kTableMask) + 1];
+        const float a = tab[i0 & mask], b = tab[(i0 & mask) + 1];
         out[i] += wk * (a + f * (b - a));
         wk += dw;
         ph += inc;
         ph -= (float)(int)ph;
       }
       ph_[k] = ph;
+    }
+
+    // ---- BRIGHT: two one-pole low-passes, cutoff key-tracked ----
+    // cutoff = 2 x f0 (0) .. 512 x f0 (~100); 100 = off. 12 dB/octave.
+    const float br = clampf(p.bright + mb_, 0.f, 1.f);
+    if (br < 0.999f) {
+      float fc = w0_ * exp2f(1.f + br * 8.f);  // cycles per sample
+      if (fc > 0.45f) fc = 0.45f;
+      const float a = 1.f - expf(-6.2831853f * fc);
+      float y1 = lp1_, y2 = lp2_;
+      for (int i = 0; i < len; ++i) {
+        y1 += a * (out[i] - y1);
+        y2 += a * (y1 - y2);
+        out[i] = y2;
+      }
+      lp1_ = y1;
+      lp2_ = y2;
+    } else {
+      lp1_ = lp2_ = out[len - 1];  // ready to fade in without a jump
     }
   }
 
@@ -501,7 +582,8 @@ class Voice {
   float ph_[kNumCorners];
   float wz_[kNumCorners] = {0, 0, 0, 0};
   float w0_ = 0.f;
-  float mx_ = 0.f, my_ = 0.f, ma_ = 0.f, mr_ = 0.f;
+  float mx_ = 0.f, my_ = 0.f, ma_ = 0.f, mr_ = 0.f, mb_ = 0.f;
+  float lp1_ = 0.f, lp2_ = 0.f;
   float pos_ = 0.f;
   float wax_ = 0.f, way_ = 0.f, wbx_ = 0.f, wby_ = 0.f, rx_ = 0.f, ry_ = 0.f;
   float xs_ = 0.5f, ys_ = 0.5f;
