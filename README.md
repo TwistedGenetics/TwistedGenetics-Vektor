@@ -39,7 +39,7 @@ Vektor then appears at the end of the oscillator list as **Vektor**. It's polyph
 | 2 | DETUNE | 0–100 % | Spreads the corners up to 12 cents apart (A stays, B up, C down, D half up). Adds movement and width to blends |
 | 3 | PATHRATE | 0–100 | Path speed: about 4 s per segment at 0, ~20 ms at 100 |
 | 3 | PATHAMT | 0–100 % | How far the path moves the X/Y point. 100 % with the knobs centred covers the whole square |
-| 3 | BRIGHT | 0–100 | Key-tracked low-pass (12 dB/oct) that takes the edge off bright waves. 0 = almost a sine, 60 = default, 100 = off (raw waves). Because it tracks the note, it sounds the same across the keyboard |
+| 3 | BRIGHT | 0–100 | Key-tracked low-pass (12 dB/oct) that takes the edge off bright waves. 0 = almost a sine, 35 = default (cutoff about 14× the note), 100 = off (raw, bright waves). Because it tracks the note, it sounds the same across the keyboard |
 
 ### The paths
 
@@ -83,12 +83,12 @@ Vektor adds five modulation destinations: **VectorX**, **VectorY**, **PathAmt**,
 
 | Name | X | Y | Path | A | B | C | D | Detune | Rate | Amt | Bright |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| **Init (default)** | 512 | 512 | Circle | Saw | Vox A | Glass | Organ | 20 | 30 | 70 | 60 |
-| **VS Pad** | 512 | 512 | A>D | Vox O | Glass | Organ | Saw | 35 | 20 | 100 | 55 |
-| **Digital Tour** | 512 | 512 | Tour | Metal | Sync | Comb | Fold | 10 | 45 | 100 | 75 |
-| **Choir Drift** | 512 | 512 | Wander | Vox A | Vox O | Reed | Tri | 50 | 25 | 90 | 60 |
-| **Wobble Bass** | 512 | 300 | Bounce | Saw | Square | Pulse | Narrow | 15 | 70 | 80 | 45 |
-| **Brass Eight** | 512 | 512 | Fig 8 | Brass | Saw | Square | Organ | 25 | 40 | 75 | 65 |
+| **Init (default)** | 512 | 512 | Circle | Saw | Vox A | Glass | Organ | 20 | 30 | 70 | 35 |
+| **VS Pad** | 512 | 512 | A>D | Vox O | Glass | Organ | Saw | 35 | 20 | 100 | 30 |
+| **Digital Tour** | 512 | 512 | Tour | Metal | Sync | Comb | Fold | 10 | 45 | 100 | 50 |
+| **Choir Drift** | 512 | 512 | Wander | Vox A | Vox O | Reed | Tri | 50 | 25 | 90 | 35 |
+| **Wobble Bass** | 512 | 300 | Bounce | Saw | Square | Pulse | Narrow | 15 | 70 | 80 | 25 |
+| **Brass Eight** | 512 | 512 | Fig 8 | Brass | Saw | Square | Organ | 25 | 40 | 75 | 40 |
 
 Every build renders these as WAV demos (in the Actions build artifact, `test/out/`).
 
@@ -120,6 +120,7 @@ Developer ID `0x5477476E` ('TwGn'), unit ID 0x10 (16), kept well clear of the ID
 
 ## Changes
 
+- **1.1.1**: darker default: BRIGHT now starts at 35 (was 60), which takes the raspy top edge off the raw waves. Starter settings updated to match. Patches saved with 1.1.0 keep their own BRIGHT value.
 - **1.1.0**: fixes the buzzy, fizzy sound of 1.0.0. The wave tables were too short (512 samples) for the number of harmonics in them, so reading between table samples added inharmonic noise only 35–55 dB down, worst on bass notes. Tables are now 1024–8192 samples, which puts that noise 73 dB or more down. Also: new **BRIGHT** control (key-tracked low-pass, default 60) and Bright modulation destination, softer gaps between the Vox formants, and corner D defaults to Organ instead of Sync.
 - **1.0.0**: first release.
 

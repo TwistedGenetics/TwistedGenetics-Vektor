@@ -309,12 +309,12 @@ int main() {
   if (system("mkdir -p test/out") != 0) return 1;
   struct Demo { const char *name; Set s; std::vector<float> notes; float secs; };
   const Demo demos[] = {
-      {"default_circle", {512, 512, kPathCircle, kSaw, kVoxA, kGlass, kOrgan, 20, 30, 70, 60}, {48, 55, 60, 63}, 6},
-      {"a_to_d_pad", {512, 512, kPathAtoD, kVoxO, kGlass, kOrgan, kSaw, 35, 20, 100, 55}, {45, 52, 57, 60, 64}, 6},
-      {"tour_digital", {512, 512, kPathTour, kMetal, kSync, kComb, kFold, 10, 45, 100, 75}, {50, 57, 62}, 5},
-      {"wander_choir", {512, 512, kPathWander, kVoxA, kVoxO, kReed, kTri, 50, 25, 90, 60}, {48, 55, 60, 64, 67}, 7},
-      {"bounce_bass", {512, 300, kPathBounce, kSaw, kSquare, kPulse, kNarrow, 15, 70, 80, 45}, {36}, 4},
-      {"fig8_brass", {512, 512, kPathFig8, kBrass, kSaw, kSquare, kOrgan, 25, 40, 75, 65}, {53, 57, 60}, 6},
+      {"default_circle", {512, 512, kPathCircle, kSaw, kVoxA, kGlass, kOrgan, 20, 30, 70, 35}, {48, 55, 60, 63}, 6},
+      {"a_to_d_pad", {512, 512, kPathAtoD, kVoxO, kGlass, kOrgan, kSaw, 35, 20, 100, 30}, {45, 52, 57, 60, 64}, 6},
+      {"tour_digital", {512, 512, kPathTour, kMetal, kSync, kComb, kFold, 10, 45, 100, 50}, {50, 57, 62}, 5},
+      {"wander_choir", {512, 512, kPathWander, kVoxA, kVoxO, kReed, kTri, 50, 25, 90, 35}, {48, 55, 60, 64, 67}, 7},
+      {"bounce_bass", {512, 300, kPathBounce, kSaw, kSquare, kPulse, kNarrow, 15, 70, 80, 25}, {36}, 4},
+      {"fig8_brass", {512, 512, kPathFig8, kBrass, kSaw, kSquare, kOrgan, 25, 40, 75, 40}, {53, 57, 60}, 6},
   };
   for (const Demo &d : demos) {
     const Params p = makeParams(d.s);

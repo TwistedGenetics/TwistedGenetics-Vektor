@@ -325,7 +325,7 @@ struct Params {
   float detRatio[kNumCorners] = {1.f, 1.f, 1.f, 1.f};
   float segPerSec = 1.f;
   float amount = 0.7f;
-  float bright = 0.6f;
+  float bright = 0.35f;
 
   void set(int id, int32_t v) {
     switch (id) {
